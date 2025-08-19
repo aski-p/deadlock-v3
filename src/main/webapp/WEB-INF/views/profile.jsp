@@ -73,6 +73,29 @@
                         <div class="matches-container">
                             <div class="matches-header">
                                 <h3>최근 매치</h3>
+                                
+                                <!-- 패치 및 날짜 필터 -->
+                                <div class="patch-filters">
+                                    <div class="filter-group">
+                                        <label for="patchSelector">패치:</label>
+                                        <select id="patchSelector">
+                                            <option value="all">전체</option>
+                                            <option value="current" selected>현재 패치</option>
+                                            <option value="previous">이전 패치</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <div class="filter-group">
+                                        <label for="dateRangeStart">기간:</label>
+                                        <input type="date" id="dateRangeStart" 
+                                               value="2025-05-08" max="2025-08-19">
+                                        <span class="date-separator">~</span>
+                                        <input type="date" id="dateRangeEnd" 
+                                               value="2025-08-19" max="2025-08-19">
+                                    </div>
+                                </div>
+                                
+                                <!-- 기존 필터들 -->
                                 <div class="matches-filters">
                                     <select id="heroFilter" onchange="filterMatches()">
                                         <option value="">모든 캐릭터</option>

@@ -15,7 +15,7 @@ PORT = 8080
 
 class DeadlockHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory="/home/aski/deadlock-v3/src/main/webapp", **kwargs)
+        super().__init__(*args, directory="/Users/aski/deadlock-v3/src/main/webapp", **kwargs)
     
     def do_GET(self):
         # URL 파싱
@@ -387,7 +387,7 @@ class DeadlockHandler(http.server.SimpleHTTPRequestHandler):
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {format % args}")
 
 if __name__ == "__main__":
-    os.chdir("/home/aski/deadlock-v3")
+    os.chdir("/Users/aski/deadlock-v3")
     
     with socketserver.TCPServer(("", PORT), DeadlockHandler) as httpd:
         print(f"""

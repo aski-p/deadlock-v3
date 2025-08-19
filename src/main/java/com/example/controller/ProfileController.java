@@ -79,4 +79,73 @@ public class ProfileController {
         String steamId = (String) session.getAttribute("steamId");
         return deadlockService.getPlayerStats(steamId);
     }
+    
+    /**
+     * 날짜 범위별 매치 데이터 조회 API
+     */
+    @GetMapping("/api/matches/daterange")
+    @ResponseBody
+    public Map<String, Object> getMatchesByDateRange(HttpSession session,
+                                                   @RequestParam String startDate,
+                                                   @RequestParam String endDate) {
+        Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
+        if (isLoggedIn == null || !isLoggedIn) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "Not authenticated");
+            return error;
+        }
+        
+        String steamId = (String) session.getAttribute("steamId");
+        return deadlockService.getPlayerMatchesWithDateRange(steamId, startDate, endDate);
+    }
+    
+    /**
+     * 패치별 플레이어 데이터 조회 API (Deadlock API와 동일한 형식)
+     */
+    @GetMapping("/api/patch-data")
+    @ResponseBody
+    public Map<String, Object> getPatchData(HttpSession session,
+                                          @RequestParam(required = false) String patchTab,
+                                          @RequestParam(defaultValue = "matches") String tab,
+                                          @RequestParam(required = false) String dateRange) {
+        
+        Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
+        if (isLoggedIn == null || !isLoggedIn) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "Not authenticated");
+            return error;
+        }
+        
+        String steamId = (String) session.getAttribute("steamId");
+        
+        // 날짜 범위 파싱 (2025-05-08T19:43:20.000Z_2025-08-19T23:59:59.999Z 형식)
+        String startDate = null;
+        String endDate = null;
+        
+        if (dateRange != null && dateRange.contains("_")) {
+            String[] dates = dateRange.split("_");
+            if (dates.length == 2) {
+                startDate = dates[0];
+                endDate = dates[1];
+            }
+        }
+        
+        // 기본값 설정 (최근 3개월)
+        if (startDate == null || endDate == null) {
+            endDate = "2025-08-19T23:59:59.999Z";
+            startDate = "2025-05-08T19:43:20.000Z";
+        }
+        
+        Map<String, Object> result = deadlockService.getPlayerDataByPatch(steamId, startDate, endDate);
+        
+        // Deadlock API와 호환되는 응답 형식으로 변환
+        Map<String, Object> response = new HashMap<>();
+        response.put("steamId", steamId);
+        response.put("tab", tab);
+        response.put("patchTab", patchTab != null ? patchTab : "patch");
+        response.put("dateRange", dateRange != null ? dateRange : (startDate + "_" + endDate));
+        response.put("data", result);
+        
+        return response;
+    }
 }

@@ -3,6 +3,8 @@
 let currentMatchPage = 0;
 let loadingMatches = false;
 let hasMoreMatches = true;
+let currentPatchFilter = null;
+let currentDateRange = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     initializeProfilePage();
@@ -14,6 +16,9 @@ function initializeProfilePage() {
     
     // Initialize match filtering
     initializeMatchFilters();
+    
+    // Initialize patch filtering
+    initializePatchFilters();
     
     // Initialize infinite scroll for matches
     initializeInfiniteScroll();
@@ -334,9 +339,174 @@ function updateStatsDisplay(stats) {
     updateStat('.favorite-hero-value', stats.favoriteHero);
 }
 
+// Patch filtering functionality
+function initializePatchFilters() {
+    // URL에서 패치 정보 읽기
+    const urlParams = new URLSearchParams(window.location.search);
+    currentPatchFilter = urlParams.get('pd-picker-tab');
+    currentDateRange = urlParams.get('date_range');
+    
+    // 패치 선택 드롭다운 초기화
+    const patchSelector = document.getElementById('patchSelector');
+    if (patchSelector) {
+        patchSelector.addEventListener('change', function() {
+            const selectedPatch = this.value;
+            loadDataByPatch(selectedPatch);
+        });
+        
+        // 현재 선택된 패치로 설정
+        if (currentPatchFilter) {
+            patchSelector.value = currentPatchFilter;
+        }
+    }
+    
+    // 날짜 범위 선택기 초기화
+    const dateRangeStart = document.getElementById('dateRangeStart');
+    const dateRangeEnd = document.getElementById('dateRangeEnd');
+    
+    if (dateRangeStart && dateRangeEnd) {
+        dateRangeStart.addEventListener('change', updateDateRange);
+        dateRangeEnd.addEventListener('change', updateDateRange);
+        
+        // URL의 날짜 범위로 초기화
+        if (currentDateRange && currentDateRange.includes('_')) {
+            const [start, end] = currentDateRange.split('_');
+            dateRangeStart.value = start.substring(0, 10); // ISO date에서 날짜 부분만
+            dateRangeEnd.value = end.substring(0, 10);
+        }
+    }
+}
+
+async function loadDataByPatch(patchName) {
+    try {
+        AppUtils.showLoading('matches-tab');
+        
+        // 패치별 기본 날짜 범위 설정
+        const patchDates = getPatchDateRange(patchName);
+        
+        const response = await AppUtils.apiCall('/profile/api/patch-data', {
+            patchTab: patchName,
+            tab: 'matches',
+            dateRange: patchDates.start + '_' + patchDates.end
+        });
+        
+        // URL 업데이트
+        updateURL({
+            'pd-picker-tab': patchName,
+            'date_range': patchDates.start + '_' + patchDates.end
+        });
+        
+        // 매치 리스트 업데이트
+        updateMatchesList(response.data.matches);
+        
+        // 통계 업데이트
+        updateStatsDisplay(response.data.stats);
+        
+    } catch (error) {
+        console.error('Failed to load patch data:', error);
+        AppUtils.showError('matches-tab', '패치 데이터를 불러올 수 없습니다.');
+    } finally {
+        AppUtils.hideLoading('matches-tab');
+    }
+}
+
+async function updateDateRange() {
+    const dateRangeStart = document.getElementById('dateRangeStart');
+    const dateRangeEnd = document.getElementById('dateRangeEnd');
+    
+    if (!dateRangeStart.value || !dateRangeEnd.value) return;
+    
+    try {
+        AppUtils.showLoading('matches-tab');
+        
+        const startDate = dateRangeStart.value + 'T00:00:00.000Z';
+        const endDate = dateRangeEnd.value + 'T23:59:59.999Z';
+        
+        const response = await AppUtils.apiCall('/profile/api/matches/daterange', {
+            startDate: startDate,
+            endDate: endDate
+        });
+        
+        // URL 업데이트
+        updateURL({
+            'date_range': startDate + '_' + endDate
+        });
+        
+        // 매치 리스트 업데이트
+        updateMatchesList(response.matches);
+        
+    } catch (error) {
+        console.error('Failed to load date range data:', error);
+        AppUtils.showError('matches-tab', '날짜별 데이터를 불러올 수 없습니다.');
+    } finally {
+        AppUtils.hideLoading('matches-tab');
+    }
+}
+
+function getPatchDateRange(patchName) {
+    // 패치별 대략적인 날짜 범위 (실제 패치 노트 기반으로 업데이트 필요)
+    const patchDates = {
+        'current': {
+            start: '2025-07-01T00:00:00.000Z',
+            end: '2025-08-19T23:59:59.999Z'
+        },
+        'previous': {
+            start: '2025-05-08T19:43:20.000Z',
+            end: '2025-06-30T23:59:59.999Z'
+        },
+        'all': {
+            start: '2025-01-01T00:00:00.000Z',
+            end: '2025-08-19T23:59:59.999Z'
+        }
+    };
+    
+    return patchDates[patchName] || patchDates['all'];
+}
+
+function updateURL(params) {
+    const url = new URL(window.location);
+    
+    Object.keys(params).forEach(key => {
+        if (params[key]) {
+            url.searchParams.set(key, params[key]);
+        } else {
+            url.searchParams.delete(key);
+        }
+    });
+    
+    window.history.pushState({}, '', url);
+}
+
+function updateMatchesList(matches) {
+    const matchesList = document.getElementById('matchesList');
+    if (!matchesList) return;
+    
+    // 기존 매치들 제거
+    matchesList.innerHTML = '';
+    
+    // 새 매치들 추가
+    if (matches && matches.length > 0) {
+        matches.forEach(match => {
+            const matchCard = createMatchCard(match);
+            matchesList.appendChild(matchCard);
+        });
+        
+        // 필터 옵션 업데이트
+        populateHeroFilter();
+    } else {
+        matchesList.innerHTML = '<div class="no-matches">선택한 기간에 매치 기록이 없습니다.</div>';
+    }
+    
+    // 페이지 정보 리셋
+    currentMatchPage = 0;
+    hasMoreMatches = matches && matches.length >= 10;
+}
+
 // Export functions for global use
 window.ProfilePage = {
     switchTab,
     filterMatches,
-    loadMoreMatches
+    loadMoreMatches,
+    loadDataByPatch,
+    updateDateRange
 };

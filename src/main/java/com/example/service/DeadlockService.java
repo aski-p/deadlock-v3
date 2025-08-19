@@ -17,8 +17,13 @@ import org.springframework.stereotype.Service;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.io.IOException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
 public class DeadlockService {
@@ -140,10 +145,59 @@ public class DeadlockService {
     }
     
     /**
+     * 날짜 범위별 플레이어 매치 데이터 조회
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getPlayerMatchesWithDateRange(String steamId, String startDate, String endDate) {
+        if (steamId == null || steamId.trim().isEmpty()) {
+            logger.warn("Invalid Steam ID provided for match data: {}", steamId);
+            return createEmptyResponse();
+        }
+        
+        // 기본 매치 데이터 조회
+        Map<String, Object> matchData = getPlayerMatches(steamId);
+        List<Map<String, Object>> allMatches = (List<Map<String, Object>>) matchData.get("matches");
+        
+        // 날짜 필터링
+        if (startDate != null && endDate != null) {
+            List<Map<String, Object>> filteredMatches = filterMatchesByDateRange(allMatches, startDate, endDate);
+            Map<String, Object> result = new HashMap<>();
+            result.put("matches", filteredMatches);
+            result.put("totalMatches", filteredMatches.size());
+            return result;
+        }
+        
+        return matchData;
+    }
+    
+    /**
+     * 패치별 플레이어 데이터 조회 (패치 날짜 기반)
+     */
+    public Map<String, Object> getPlayerDataByPatch(String steamId, String patchStartDate, String patchEndDate) {
+        logger.info("Fetching player data for Steam ID: {} from {} to {}", steamId, patchStartDate, patchEndDate);
+        
+        Map<String, Object> result = new HashMap<>();
+        
+        // 매치 데이터 조회 (날짜 범위 필터링)
+        Map<String, Object> matchData = getPlayerMatchesWithDateRange(steamId, patchStartDate, patchEndDate);
+        List<Map<String, Object>> matches = (List<Map<String, Object>>) matchData.get("matches");
+        
+        // 통계 계산
+        Map<String, Object> stats = calculateStatsFromMatches(matches);
+        
+        result.put("matches", matches);
+        result.put("totalMatches", matches.size());
+        result.put("stats", stats);
+        result.put("patchPeriod", Map.of("start", patchStartDate, "end", patchEndDate));
+        
+        return result;
+    }
+    
+    /**
      * 플레이어 통계 정보 조회
      */
     public Map<String, Object> getPlayerStats(String steamId) {
-        String url = String.format("%s/api/player/%s/stats", DEADLOCK_API_BASE_URL, steamId);
+        String url = String.format("%s/api/player/%s/stats", deadlockApiBaseUrl, steamId);
         
         try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
             HttpGet request = new HttpGet(url);
@@ -287,6 +341,93 @@ public class DeadlockService {
         stats.put("winRate", 0.0);
         stats.put("avgKDA", 0.0);
         stats.put("favoriteHero", "Unknown");
+        return stats;
+    }
+    
+    /**
+     * 날짜 범위로 매치 필터링
+     */
+    private List<Map<String, Object>> filterMatchesByDateRange(List<Map<String, Object>> matches, String startDate, String endDate) {
+        try {
+            long startTimestamp = parseISODate(startDate);
+            long endTimestamp = parseISODate(endDate);
+            
+            return matches.stream()
+                    .filter(match -> {
+                        Long matchTime = (Long) match.get("startTime");
+                        if (matchTime == null) return false;
+                        return matchTime >= startTimestamp && matchTime <= endTimestamp;
+                    })
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            logger.error("Error filtering matches by date range: {} - {}", startDate, endDate, e);
+            return matches; // 필터링 실패 시 전체 매치 반환
+        }
+    }
+    
+    /**
+     * ISO 날짜 문자열을 타임스탬프로 변환
+     */
+    private long parseISODate(String dateStr) {
+        try {
+            // "2025-05-08T19:43:20.000Z" 형식 파싱
+            Instant instant = Instant.parse(dateStr);
+            return instant.toEpochMilli();
+        } catch (Exception e) {
+            logger.warn("Failed to parse date: {}, using current time", dateStr);
+            return System.currentTimeMillis();
+        }
+    }
+    
+    /**
+     * 매치 리스트에서 통계 계산
+     */
+    private Map<String, Object> calculateStatsFromMatches(List<Map<String, Object>> matches) {
+        Map<String, Object> stats = new HashMap<>();
+        
+        if (matches.isEmpty()) {
+            return createEmptyStats();
+        }
+        
+        int totalKills = 0;
+        int totalDeaths = 0;
+        int totalAssists = 0;
+        int wins = 0;
+        Map<String, Integer> heroCount = new HashMap<>();
+        
+        for (Map<String, Object> match : matches) {
+            totalKills += (Integer) match.getOrDefault("kills", 0);
+            totalDeaths += (Integer) match.getOrDefault("deaths", 0);
+            totalAssists += (Integer) match.getOrDefault("assists", 0);
+            
+            if ("WIN".equals(match.get("result"))) {
+                wins++;
+            }
+            
+            String hero = (String) match.getOrDefault("hero", "Unknown");
+            heroCount.put(hero, heroCount.getOrDefault(hero, 0) + 1);
+        }
+        
+        // 가장 많이 플레이한 영웅
+        String favoriteHero = heroCount.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse("Unknown");
+        
+        double winRate = matches.size() > 0 ? (double) wins / matches.size() * 100 : 0.0;
+        double avgKDA = totalDeaths > 0 ? (double) (totalKills + totalAssists) / totalDeaths : 
+                        (totalKills + totalAssists > 0 ? 999.0 : 0.0);
+        
+        stats.put("totalKills", totalKills);
+        stats.put("totalDeaths", totalDeaths);
+        stats.put("totalAssists", totalAssists);
+        stats.put("winRate", Math.round(winRate * 100.0) / 100.0);
+        stats.put("avgKDA", Math.round(avgKDA * 100.0) / 100.0);
+        stats.put("favoriteHero", favoriteHero);
+        stats.put("totalMatches", matches.size());
+        stats.put("wins", wins);
+        stats.put("losses", matches.size() - wins);
+        
         return stats;
     }
 }
