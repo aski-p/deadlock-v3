@@ -2,36 +2,120 @@ package com.example.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class DeadlockService {
     
-    private static final String DEADLOCK_API_BASE_URL = "https://deadlock-api.com";
+    private static final Logger logger = LoggerFactory.getLogger(DeadlockService.class);
+    
+    @Value("${deadlock.api.base.url}")
+    private String deadlockApiBaseUrl;
+    
+    @Value("${http.client.connection.timeout:30000}")
+    private int connectionTimeout;
+    
+    @Value("${http.client.socket.timeout:30000}")
+    private int socketTimeout;
+    
+    @Value("${cache.match.data.ttl:180}")
+    private int cacheMatchDataTtl;
+    
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private CloseableHttpClient httpClient;
+    private final Map<String, CacheEntry> matchCache = new ConcurrentHashMap<>();
+    private final Map<String, CacheEntry> statsCache = new ConcurrentHashMap<>();
+    
+    private static class CacheEntry {
+        final Object data;
+        final long expireTime;
+        
+        CacheEntry(Object data, long ttlSeconds) {
+            this.data = data;
+            this.expireTime = System.currentTimeMillis() + (ttlSeconds * 1000);
+        }
+        
+        boolean isExpired() {
+            return System.currentTimeMillis() > expireTime;
+        }
+    }
+    
+    @PostConstruct
+    public void init() {
+        PoolingHttpClientConnectionManager cm = new PoolingHttpClientConnectionManager();
+        cm.setMaxTotal(50);
+        cm.setDefaultMaxPerRoute(10);
+        
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(connectionTimeout)
+                .setSocketTimeout(socketTimeout)
+                .build();
+        
+        this.httpClient = HttpClients.custom()
+                .setConnectionManager(cm)
+                .setDefaultRequestConfig(requestConfig)
+                .build();
+        
+        logger.info("DeadlockService initialized with HTTP client");
+    }
+    
+    @PreDestroy
+    public void destroy() {
+        if (httpClient != null) {
+            try {
+                httpClient.close();
+                logger.info("DeadlockService HTTP client closed");
+            } catch (IOException e) {
+                logger.error("Error closing HTTP client", e);
+            }
+        }
+    }
     
     /**
-     * 플레이어 매치 데이터 조회
+     * 플레이어 매치 데이터 조회 (캐시 지원)
      */
+    @SuppressWarnings("unchecked")
     public Map<String, Object> getPlayerMatches(String steamId) {
-        // 실제 Deadlock API 호출
-        String url = String.format("%s/v1/players/%s/matches", DEADLOCK_API_BASE_URL, steamId);
+        if (steamId == null || steamId.trim().isEmpty()) {
+            logger.warn("Invalid Steam ID provided for match data: {}", steamId);
+            return createEmptyResponse();
+        }
         
-        try (CloseableHttpClient httpClient = HttpClients.createDefault()) {
+        // 캐시 확인
+        CacheEntry cached = matchCache.get(steamId);
+        if (cached != null && !cached.isExpired()) {
+            logger.debug("Cache hit for match data: {}", steamId);
+            return (Map<String, Object>) cached.data;
+        }
+        
+        String url = String.format("%s/v1/players/%s/matches", deadlockApiBaseUrl, steamId);
+        logger.debug("Fetching match data for Steam ID: {}", steamId);
+        
+        try {
             HttpGet request = new HttpGet(url);
-            request.setHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.setHeader("User-Agent", "Deadlock-Stats-Tracker/1.0");
             request.setHeader("Accept", "application/json");
             
             try (CloseableHttpResponse response = httpClient.execute(request)) {
-                if (response.getStatusLine().getStatusCode() == 200) {
+                int statusCode = response.getStatusLine().getStatusCode();
+                
+                if (statusCode == 200) {
                     String jsonResponse = EntityUtils.toString(response.getEntity());
                     JsonNode root = objectMapper.readTree(jsonResponse);
                     
@@ -39,14 +123,18 @@ public class DeadlockService {
                     result.put("matches", parseDeadlockMatches(root));
                     result.put("totalMatches", root.isArray() ? root.size() : 0);
                     
+                    // 캐시에 저장
+                    matchCache.put(steamId, new CacheEntry(result, cacheMatchDataTtl));
+                    logger.debug("Match data cached for Steam ID: {}", steamId);
+                    
                     return result;
                 } else {
-                    // API 실패시 Steam ID 54776284의 실제 데이터 구조로 시뮬레이션
+                    logger.warn("Deadlock API returned status code: {} for Steam ID: {}, using fallback data", statusCode, steamId);
                     return createRealisticMatchData(steamId);
                 }
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error fetching match data for Steam ID: " + steamId, e);
             return createRealisticMatchData(steamId);
         }
     }

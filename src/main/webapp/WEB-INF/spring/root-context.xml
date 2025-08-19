@@ -9,6 +9,9 @@
 	
     <!-- Root Context: defines shared resources visible to all other web components -->
     
+    <!-- Load application properties -->
+    <context:property-placeholder location="classpath:application.properties" />
+    
     <!-- Service Layer Component Scan -->
     <context:component-scan base-package="com.example.service" />
     
