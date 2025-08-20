@@ -31,11 +31,14 @@ public class ProfileController {
         // 로그인 체크
         Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
         if (isLoggedIn == null || !isLoggedIn) {
-            return "redirect:/auth/login";
+            return "redirect:/auth/steam";
         }
         
-        String steamId = (String) session.getAttribute("steamId");
-        Map<String, Object> userInfo = (Map<String, Object>) session.getAttribute("user");
+        String steamId;
+        Map<String, Object> userInfo;
+        
+        steamId = (String) session.getAttribute("steamId");
+        userInfo = (Map<String, Object>) session.getAttribute("user");
         
         // Deadlock 프로필 데이터 조회
         Map<String, Object> profileData = deadlockService.getPlayerProfile(steamId);
@@ -55,28 +58,32 @@ public class ProfileController {
                                          @RequestParam(defaultValue = "0") int page,
                                          @RequestParam(defaultValue = "10") int size) {
         
+        String steamId;
+        
         Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
         if (isLoggedIn == null || !isLoggedIn) {
             Map<String, Object> error = new HashMap<>();
             error.put("error", "Not authenticated");
             return error;
         }
+        steamId = (String) session.getAttribute("steamId");
         
-        String steamId = (String) session.getAttribute("steamId");
         return deadlockService.getPlayerMatches(steamId);
     }
     
     @GetMapping("/api/stats")
     @ResponseBody
     public Map<String, Object> getStats(HttpSession session) {
+        String steamId;
+        
         Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
         if (isLoggedIn == null || !isLoggedIn) {
             Map<String, Object> error = new HashMap<>();
             error.put("error", "Not authenticated");
             return error;
         }
+        steamId = (String) session.getAttribute("steamId");
         
-        String steamId = (String) session.getAttribute("steamId");
         return deadlockService.getPlayerStats(steamId);
     }
     
@@ -87,15 +94,18 @@ public class ProfileController {
     @ResponseBody
     public Map<String, Object> getMatchesByDateRange(HttpSession session,
                                                    @RequestParam String startDate,
-                                                   @RequestParam String endDate) {
+                                                   @RequestParam String endDate,
+                                                   @RequestParam(required = false) String demo) {
+        String steamId;
+        
         Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
         if (isLoggedIn == null || !isLoggedIn) {
             Map<String, Object> error = new HashMap<>();
             error.put("error", "Not authenticated");
             return error;
         }
+        steamId = (String) session.getAttribute("steamId");
         
-        String steamId = (String) session.getAttribute("steamId");
         return deadlockService.getPlayerMatchesWithDateRange(steamId, startDate, endDate);
     }
     
@@ -107,7 +117,10 @@ public class ProfileController {
     public Map<String, Object> getPatchData(HttpSession session,
                                           @RequestParam(required = false) String patchTab,
                                           @RequestParam(defaultValue = "matches") String tab,
-                                          @RequestParam(required = false) String dateRange) {
+                                          @RequestParam(required = false) String dateRange,
+                                          @RequestParam(required = false) String demo) {
+        
+        String steamId;
         
         Boolean isLoggedIn = (Boolean) session.getAttribute("isLoggedIn");
         if (isLoggedIn == null || !isLoggedIn) {
@@ -115,8 +128,7 @@ public class ProfileController {
             error.put("error", "Not authenticated");
             return error;
         }
-        
-        String steamId = (String) session.getAttribute("steamId");
+        steamId = (String) session.getAttribute("steamId");
         
         // 날짜 범위 파싱 (2025-05-08T19:43:20.000Z_2025-08-19T23:59:59.999Z 형식)
         String startDate = null;

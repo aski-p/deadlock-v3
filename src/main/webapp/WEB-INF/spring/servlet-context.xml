@@ -26,12 +26,14 @@
     <!-- Component Scan -->
     <context:component-scan base-package="com.example.controller" />
 
-    <!-- Multipart Resolver (파일 업로드) -->
+    <!-- Multipart Resolver (파일 업로드) - 현재 사용하지 않음 -->
+    <!--
     <beans:bean id="multipartResolver" 
                 class="org.springframework.web.multipart.commons.CommonsMultipartResolver">
         <beans:property name="maxUploadSize" value="10485760" />
         <beans:property name="defaultEncoding" value="UTF-8" />
     </beans:bean>
+    -->
 
     <!-- Interceptor 설정 (필요시 활성화) -->
     <!--

@@ -44,7 +44,10 @@
                                 <span class="stat-label">평균 KDA</span>
                             </div>
                             <div class="stat-item">
-                                <span class="stat-value">${profileData.favoriteHero}</span>
+                                <div class="favorite-hero">
+                                    <img src="${profileData.favoriteHeroImage}" alt="${profileData.favoriteHero}" class="hero-icon">
+                                    <span class="stat-value">${profileData.favoriteHero}</span>
+                                </div>
                                 <span class="stat-label">주 캐릭터</span>
                             </div>
                         </div>
@@ -144,10 +147,23 @@
                                         
                                         <div class="match-time">
                                             <span class="time-value" data-timestamp="${match.startTime}">
-                                                <script>
-                                                    document.write(formatTimeAgo(${match.startTime}));
-                                                </script>
+                                                <!-- JavaScript로 동적 업데이트 -->
                                             </span>
+                                        </div>
+                                        
+                                        <div class="match-items">
+                                            <span class="items-label">Final Items</span>
+                                            <div class="items-grid">
+                                                <c:forEach var="item" items="${match.finalItems}" varStatus="status">
+                                                    <img src="${item.image}" 
+                                                         alt="${item.name}" 
+                                                         class="item-icon"
+                                                         title="${item.name}">
+                                                </c:forEach>
+                                                <c:if test="${empty match.finalItems}">
+                                                    <span class="no-items">No items data</span>
+                                                </c:if>
+                                            </div>
                                         </div>
                                     </div>
                                 </c:forEach>

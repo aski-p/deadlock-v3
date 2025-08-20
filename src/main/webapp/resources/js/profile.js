@@ -6,6 +6,34 @@ let hasMoreMatches = true;
 let currentPatchFilter = null;
 let currentDateRange = null;
 
+// Time formatting utility functions
+function formatTimeAgo(timestamp) {
+    const now = new Date();
+    const matchTime = new Date(timestamp);
+    const diff = now - matchTime;
+    
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    const months = Math.floor(days / 30);
+    const years = Math.floor(days / 365);
+    
+    if (seconds < 60) {
+        return '방금 전';
+    } else if (minutes < 60) {
+        return `${minutes}분 전`;
+    } else if (hours < 24) {
+        return `${hours}시간 전`;
+    } else if (days < 30) {
+        return `${days}일 전`;
+    } else if (months < 12) {
+        return `${months}개월 전`;
+    } else {
+        return `${years}년 전`;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     initializeProfilePage();
 });
@@ -22,6 +50,9 @@ function initializeProfilePage() {
     
     // Initialize infinite scroll for matches
     initializeInfiniteScroll();
+    
+    // Update all timestamps on page load
+    updateAllTimestamps();
     
     // Load initial data
     loadInitialData();
@@ -293,13 +324,24 @@ function createMatchCard(match) {
     
     const kda = (match.kills + match.assists) / (match.deaths > 0 ? match.deaths : 1);
     
+    // 특별 이미지 처리가 필요한 히어로들
+    const specialHeroes = {
+        'lash': 'lash.webp',
+        'holliday': 'holliday.webp', 
+        'mirage': 'mirage.jpg',
+        'vyper': 'vyper.jpg'
+    };
+    
+    const heroKey = match.hero.toLowerCase();
+    const heroImagePath = specialHeroes[heroKey] || (match.hero.toLowerCase() + '.jpg');
+    
     card.innerHTML = `
         <div class="match-result">
             <span class="result-text">${match.result === 'win' ? '승리' : '패배'}</span>
         </div>
         
         <div class="match-hero">
-            <img src="/resources/images/heroes/${match.hero}.jpg" 
+            <img src="/resources/images/heroes/${heroImagePath}" 
                  alt="${match.hero}" class="hero-icon"
                  onerror="this.src='/resources/images/heroes/default.jpg'">
             <span class="hero-name">${match.hero}</span>
@@ -314,8 +356,20 @@ function createMatchCard(match) {
             <span class="duration-value">${match.duration}</span>
         </div>
         
-        <div class="match-date">
-            <span class="date-value">${AppUtils.formatDate(match.date)}</span>
+        <div class="match-time">
+            <span class="time-value">${formatTimeAgo(match.startTime || match.date)}</span>
+        </div>
+        
+        <div class="match-items">
+            <span class="items-label">Final Items</span>
+            <div class="items-grid">
+                ${match.finalItems && match.finalItems.length > 0 ? 
+                    match.finalItems.map(item => 
+                        `<img src="${item.image}" alt="${item.name}" class="item-icon" title="${item.name}">`
+                    ).join('') : 
+                    '<span class="no-items">No items data</span>'
+                }
+            </div>
         </div>
     `;
     
@@ -502,11 +556,27 @@ function updateMatchesList(matches) {
     hasMoreMatches = matches && matches.length >= 10;
 }
 
+// Update all timestamps on the page
+function updateAllTimestamps() {
+    const timeElements = document.querySelectorAll('.time-value[data-timestamp]');
+    timeElements.forEach(element => {
+        const timestamp = element.getAttribute('data-timestamp');
+        if (timestamp) {
+            element.textContent = formatTimeAgo(parseInt(timestamp));
+        }
+    });
+}
+
 // Export functions for global use
 window.ProfilePage = {
     switchTab,
     filterMatches,
     loadMoreMatches,
     loadDataByPatch,
-    updateDateRange
+    updateDateRange,
+    formatTimeAgo,
+    updateAllTimestamps
 };
+
+// Expose formatTimeAgo globally for inline usage
+window.formatTimeAgo = formatTimeAgo;

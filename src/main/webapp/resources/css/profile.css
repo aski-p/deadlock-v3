@@ -1,4 +1,18 @@
 /* Profile Page Styles */
+
+/* Favorite Hero Styles */
+.favorite-hero {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.hero-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
 .profile-header {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -284,7 +298,7 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
 
 .match-card {
     display: grid;
-    grid-template-columns: 100px 1fr 120px 100px 80px 100px;
+    grid-template-columns: 100px 1fr 120px 100px 80px 100px 150px;
     align-items: center;
     gap: 1rem;
     background: rgba(23, 25, 35, 0.8);
@@ -549,4 +563,44 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
     .stat-card {
         padding: 1rem;
     }
+}
+
+/* Final Items Styles */
+.match-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.items-label {
+    font-size: 0.8rem;
+    color: #888;
+    font-weight: 500;
+}
+
+.items-grid {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+}
+
+.item-icon {
+    width: 32px;
+    height: 32px;
+    border: 2px solid #555;
+    border-radius: 4px;
+    background: #2a2a2a;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.item-icon:hover {
+    border-color: #ff6b35;
+    transform: scale(1.1);
+}
+
+.no-items {
+    font-size: 0.8rem;
+    color: #666;
+    font-style: italic;
 }
