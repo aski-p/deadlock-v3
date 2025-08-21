@@ -622,72 +622,8 @@ public class DeadlockService {
         matchData.put("assists", playerNode.has("assists") ? playerNode.get("assists").asInt() : 0);
         matchData.put("netWorth", playerNode.has("net_worth") ? playerNode.get("net_worth").asInt() : 0);
         
-        // Final Items 정보 추출 (정확한 Deadlock API 사양 적용)
-        List<Map<String, Object>> finalItems = new ArrayList<>();
-        if (playerNode.has("items") && playerNode.get("items").isArray()) {
-            JsonNode itemsArray = playerNode.get("items");
-            logger.info("Found {} total items for player Steam ID: {}", itemsArray.size(), playerNode.has("account_id") ? playerNode.get("account_id").asText() : "unknown");
-            
-            // 최종 아이템 맵 (업그레이드 처리용)
-            Map<Long, Map<String, Object>> finalItemMap = new HashMap<>();
-            
-            for (JsonNode itemNode : itemsArray) {
-                // flags가 0인 것만 (보유 중인 아이템)
-                int flags = itemNode.has("flags") ? itemNode.get("flags").asInt() : -1;
-                if (flags != 0) {
-                    logger.debug("Skipping item with flags: {}", flags);
-                    continue;
-                }
-                
-                // sold_time_s가 있는 경우 제외 (판매된 아이템)
-                if (itemNode.has("sold_time_s")) {
-                    int soldTime = itemNode.get("sold_time_s").asInt();
-                    if (soldTime > 0) {
-                        logger.debug("Skipping sold item with sold_time_s: {}", soldTime);
-                        continue;
-                    }
-                }
-                
-                // 기본 아이템 ID
-                long itemId = itemNode.has("item_id") ? itemNode.get("item_id").asLong() : 0L;
-                
-                // upgrade_id가 있으면 업그레이드된 아이템 ID 사용
-                if (itemNode.has("upgrade_id") && itemNode.get("upgrade_id").asLong() != 0) {
-                    long upgradeId = itemNode.get("upgrade_id").asLong();
-                    logger.debug("Item {} upgraded to {}", itemId, upgradeId);
-                    itemId = upgradeId;
-                }
-                
-                if (itemId > 0) {
-                    Map<String, Object> item = new HashMap<>();
-                    item.put("id", itemId);
-                    
-                    // 아이템 이름 매핑
-                    String itemName = getItemName(itemId);
-                    item.put("name", itemName);
-                    
-                    // 아이템 이미지 경로
-                    String imagePath = getItemImagePath(itemId);
-                    item.put("image", imagePath);
-                    
-                    // game_time_s 정보도 저장 (디버깅용)
-                    if (itemNode.has("game_time_s")) {
-                        item.put("gameTime", itemNode.get("game_time_s").asInt());
-                    }
-                    
-                    // 최종 아이템에 추가 (업그레이드가 있으면 덮어쓰기)
-                    finalItemMap.put(itemId, item);
-                    logger.debug("Added final item: {} (ID: {}) at game time: {}", 
-                               itemName, itemId, item.get("gameTime"));
-                }
-            }
-            
-            // Map에서 List로 변환
-            finalItems.addAll(finalItemMap.values());
-            logger.info("Final items count after processing: {}", finalItems.size());
-        } else {
-            logger.warn("No items array found for player");
-        }
+        // Final Items 정보 추출 - 최종 12개 아이템만
+        List<Map<String, Object>> finalItems = extractFinalItemsFromPlayer(playerNode);
         matchData.put("finalItems", finalItems);
     }
     
@@ -1137,48 +1073,62 @@ public class DeadlockService {
             JsonNode itemsArray = playerNode.get("items");
             logger.debug("Found {} total items for player", itemsArray.size());
             
-            // 최종 아이템들만 필터링하기 위한 Map (upgrade_id 처리용)
-            Map<Long, Map<String, Object>> finalItemMap = new HashMap<>();
+            // 아이템 슬롯 관리 (최대 12개)
+            Map<Long, Map<String, Object>> currentItems = new HashMap<>();
             
             for (JsonNode itemNode : itemsArray) {
-                // flags가 0이어야 함 (보유 중인 아이템)
+                long originalItemId = itemNode.has("item_id") ? itemNode.get("item_id").asLong() : 0;
+                
+                // sold_time_s가 있으면 해당 아이템을 인벤토리에서 제거
+                if (itemNode.has("sold_time_s")) {
+                    int soldTime = itemNode.get("sold_time_s").asInt();
+                    if (soldTime > 0) {
+                        currentItems.remove(originalItemId);
+                        logger.debug("Removed sold item: {}", originalItemId);
+                        continue;
+                    }
+                }
+                
+                // flags가 0이 아니면 스킵 (특수 아이템)
                 int flags = itemNode.has("flags") ? itemNode.get("flags").asInt() : -1;
                 if (flags != 0) {
                     logger.debug("Skipping item with flags: {}", flags);
                     continue;
                 }
                 
-                // sold_time_s가 없거나 0이어야 함
-                if (itemNode.has("sold_time_s")) {
-                    int soldTime = itemNode.get("sold_time_s").asInt();
-                    if (soldTime > 0) {
-                        logger.debug("Skipping sold item with sold_time_s: {}", soldTime);
-                        continue;
+                if (originalItemId > 0) {
+                    // 업그레이드 처리
+                    long displayItemId = originalItemId;
+                    if (itemNode.has("upgrade_id") && itemNode.get("upgrade_id").asLong() != 0) {
+                        displayItemId = itemNode.get("upgrade_id").asLong();
+                        logger.debug("Item {} upgraded to {}", originalItemId, displayItemId);
                     }
-                }
-                
-                // 아이템 ID 추출 (upgrade_id 우선)
-                long itemId = itemNode.has("item_id") ? itemNode.get("item_id").asLong() : 0;
-                if (itemNode.has("upgrade_id") && itemNode.get("upgrade_id").asLong() != 0) {
-                    long upgradeId = itemNode.get("upgrade_id").asLong();
-                    itemId = upgradeId;
-                }
-                
-                if (itemId > 0) {
-                    Map<String, Object> item = new HashMap<>();
-                    item.put("id", itemId);
-                    item.put("name", getItemName(itemId));
-                    item.put("image", getItemImagePath(itemId));
                     
-                    // upgrade_id가 있는 경우 기존 아이템을 교체
-                    finalItemMap.put(itemId, item);
-                    logger.debug("Added final item: {} ({})", item.get("name"), itemId);
+                    // 최대 12개까지만 허용
+                    if (currentItems.size() < 12 || currentItems.containsKey(originalItemId)) {
+                        Map<String, Object> item = new HashMap<>();
+                        item.put("id", displayItemId);
+                        item.put("name", getItemName(displayItemId));
+                        item.put("image", getItemImagePath(displayItemId));
+                        
+                        // 원본 아이템 ID를 키로 사용 (업그레이드 추적용)
+                        currentItems.put(originalItemId, item);
+                        logger.debug("Added/Updated item: {} ({})", item.get("name"), displayItemId);
+                    } else {
+                        logger.debug("Item inventory full (12 max), skipping: {}", displayItemId);
+                    }
                 }
             }
             
-            // Map에서 List로 변환
-            finalItems.addAll(finalItemMap.values());
-            logger.debug("Final items count after processing: {}", finalItems.size());
+            // 최종 아이템 리스트 (최대 12개)
+            finalItems.addAll(currentItems.values());
+            
+            // 정확히 12개로 제한
+            if (finalItems.size() > 12) {
+                finalItems = finalItems.subList(0, 12);
+            }
+            
+            logger.info("Final items count: {} (max 12)", finalItems.size());
         } else {
             logger.debug("No items array found for player");
         }
