@@ -888,17 +888,8 @@ public class DeadlockService {
     }
     
     private String getItemImagePath(int itemId) {
-        // 아이템 ID를 기반으로 로컬 이미지 경로 생성
-        if (itemId == 0) {
-            return "/resources/images/items/default.svg";
-        }
-        
-        // 로컬에 아이템 이미지가 있는지 확인하고 없으면 기본 이미지 반환
-        String itemImagePath = String.format("/resources/images/items/item_%d.png", itemId);
-        
-        // 실제 파일 존재 확인은 런타임에 하지 않고 모든 아이템은 기본 이미지 사용
-        // 추후 실제 아이템 이미지 다운로드 후 개별 처리 가능
-        return "/resources/images/items/default.svg";
+        // int를 long으로 변환하여 공통 메서드 호출
+        return getItemImagePath((long) itemId);
     }
     
     private String getItemImagePath(long itemId) {
@@ -907,11 +898,20 @@ public class DeadlockService {
             return "/resources/images/items/default.svg";
         }
         
-        // 큰 아이템 ID들은 문자열로 변환하여 경로 생성
-        String itemImagePath = String.format("/resources/images/items/item_%d.png", itemId);
+        // 아이템 이름과 이미지 정보 로드 (필요시)
+        if (!itemsLoaded) {
+            loadItemsFromAPI();
+        }
         
-        // 현재는 모든 아이템에 대해 기본 이미지 반환
-        // 추후 실제 아이템 이미지 다운로드 후 개별 처리 가능
+        // 아이템 이미지 캐시에서 경로 확인
+        String imagePath = itemImageCache.get(itemId);
+        if (imagePath != null && !imagePath.isEmpty()) {
+            logger.debug("Found image path for item {}: {}", itemId, imagePath);
+            return imagePath;
+        }
+        
+        // 캐시에 없으면 기본 이미지 반환
+        logger.debug("No image found for item {}, using default", itemId);
         return "/resources/images/items/default.svg";
     }
     
@@ -1247,24 +1247,19 @@ public class DeadlockService {
      * 외부 이미지 URL을 로컬 이미지 경로로 변환
      */
     private String convertToLocalImagePath(long itemId, String originalUrl) {
-        // 원본 URL에서 카테고리와 파일명 추출
-        String category = "items";
+        // 다운로드한 모든 이미지가 other 디렉토리에 있으므로, 
+        // 원본 URL에서 파일명만 추출하여 other 카테고리 사용
         String fileName = itemId + ".webp";
         
-        if (originalUrl.contains("/abilities/")) {
-            category = "abilities";
-            // abilities/yamato/yamato_crimson_slash.webp -> yamato_crimson_slash.webp
+        if (originalUrl != null) {
             String[] parts = originalUrl.split("/");
-            fileName = parts[parts.length - 1];
-        } else if (originalUrl.contains("/upgrades/")) {
-            category = "upgrades";
-            // upgrades/mods_weapon/titanic_magazine.webp -> titanic_magazine.webp  
-            String[] parts = originalUrl.split("/");
-            fileName = parts[parts.length - 1];
+            if (parts.length > 0) {
+                fileName = parts[parts.length - 1];
+            }
         }
         
-        // 로컬 이미지 경로 생성
-        return "/resources/images/items/" + category + "/" + fileName;
+        // 모든 아이템 이미지를 other 디렉토리에서 찾음
+        return "/resources/images/items/other/" + fileName;
     }
     
     /**
