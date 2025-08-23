@@ -1,6 +1,7 @@
 <%@ page contentType="text/html;charset=UTF-8" language="java" %>
 <%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@ taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@ taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <!DOCTYPE html>
 <html>
 <head>
@@ -155,10 +156,21 @@
                                             <span class="items-label">Final Items</span>
                                             <div class="items-grid">
                                                 <c:forEach var="item" items="${match.finalItems}" varStatus="status">
-                                                    <img src="${item.image}" 
-                                                         alt="${item.name}" 
-                                                         class="item-icon"
-                                                         title="${item.name}">
+                                                    <c:choose>
+                                                        <c:when test="${fn:startsWith(item.image, 'http')}">
+                                                            <img src="${item.image}" 
+                                                                 alt="${item.name}" 
+                                                                 class="item-icon"
+                                                                 title="${item.name}"
+                                                                 crossorigin="anonymous">
+                                                        </c:when>
+                                                        <c:otherwise>
+                                                            <img src="${pageContext.request.contextPath}${item.image}" 
+                                                                 alt="${item.name}" 
+                                                                 class="item-icon"
+                                                                 title="${item.name}">
+                                                        </c:otherwise>
+                                                    </c:choose>
                                                 </c:forEach>
                                                 <c:if test="${empty match.finalItems}">
                                                     <span class="no-items">No items data</span>

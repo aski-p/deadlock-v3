@@ -12,6 +12,7 @@ import org.apache.http.util.EntityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
@@ -834,16 +835,30 @@ public class DeadlockService {
             return "/resources/images/items/default.svg";
         }
         
+        // 먼저 캐시 확인
+        String cachedPath = itemImageCache.get(itemId);
+        if (cachedPath != null && !cachedPath.isEmpty()) {
+            logger.debug("Found cached image path for item {}: {}", itemId, cachedPath);
+            return cachedPath;
+        }
+        
+        // 외부 URL 직접 생성 시도
+        String externalUrl = convertToLocalImagePath(itemId, null);
+        if (!externalUrl.startsWith("/resources")) {
+            // 외부 URL이면 캐싱하고 반환
+            itemImageCache.put(itemId, externalUrl);
+            logger.debug("Generated external URL for item {}: {}", itemId, externalUrl);
+            return externalUrl;
+        }
+        
         // 아이템 이름과 이미지 정보 로드 (필요시)
         if (!itemsLoaded) {
             loadItemsFromAPI();
-        }
-        
-        // 아이템 이미지 캐시에서 경로 확인
-        String imagePath = itemImageCache.get(itemId);
-        if (imagePath != null && !imagePath.isEmpty()) {
-            logger.debug("Found image path for item {}: {}", itemId, imagePath);
-            return imagePath;
+            // 로드 후 다시 확인
+            String loadedPath = itemImageCache.get(itemId);
+            if (loadedPath != null && !loadedPath.isEmpty()) {
+                return loadedPath;
+            }
         }
         
         // 캐시에 없으면 기본 이미지 반환
@@ -1073,59 +1088,85 @@ public class DeadlockService {
             JsonNode itemsArray = playerNode.get("items");
             logger.debug("Found {} total items for player", itemsArray.size());
             
-            // 아이템 슬롯 관리 (최대 12개)
-            Map<Long, Map<String, Object>> currentItems = new HashMap<>();
+            // 아이템들을 시간순으로 정렬
+            List<JsonNode> sortedItems = new ArrayList<>();
+            itemsArray.forEach(sortedItems::add);
+            sortedItems.sort((a, b) -> {
+                int timeA = a.has("game_time_s") ? a.get("game_time_s").asInt() : 0;
+                int timeB = b.has("game_time_s") ? b.get("game_time_s").asInt() : 0;
+                return Integer.compare(timeA, timeB);
+            });
             
-            for (JsonNode itemNode : itemsArray) {
+            // 아이템 인벤토리 상태 추적
+            Map<Long, Long> currentInventory = new HashMap<>(); // 슬롯ID -> 현재 아이템ID
+            Map<Long, Long> itemToSlot = new HashMap<>(); // 아이템ID -> 슬롯ID
+            Set<Long> soldItems = new HashSet<>(); // 판매된 아이템들
+            long nextSlotId = 1;
+            
+            // 시간순으로 아이템 이벤트 처리
+            for (JsonNode itemNode : sortedItems) {
                 long originalItemId = itemNode.has("item_id") ? itemNode.get("item_id").asLong() : 0;
+                long upgradeId = itemNode.has("upgrade_id") ? itemNode.get("upgrade_id").asLong() : 0;
+                int flags = itemNode.has("flags") ? itemNode.get("flags").asInt() : -1;
+                int soldTime = itemNode.has("sold_time_s") ? itemNode.get("sold_time_s").asInt() : 0;
+                int gameTime = itemNode.has("game_time_s") ? itemNode.get("game_time_s").asInt() : 0;
                 
-                // sold_time_s가 있으면 해당 아이템을 인벤토리에서 제거
-                if (itemNode.has("sold_time_s")) {
-                    int soldTime = itemNode.get("sold_time_s").asInt();
-                    if (soldTime > 0) {
-                        currentItems.remove(originalItemId);
-                        logger.debug("Removed sold item: {}", originalItemId);
-                        continue;
-                    }
+                logger.debug("Processing item at {}s: itemId={}, upgradeId={}, flags={}, soldTime={}", 
+                           gameTime, originalItemId, upgradeId, flags, soldTime);
+                
+                // flags != 0인 아이템은 무시 (특수 아이템)
+                if (flags != 0) {
+                    continue;
                 }
                 
-                // flags가 0이 아니면 스킵 (특수 아이템)
-                int flags = itemNode.has("flags") ? itemNode.get("flags").asInt() : -1;
-                if (flags != 0) {
-                    logger.debug("Skipping item with flags: {}", flags);
+                // 판매된 아이템 처리
+                if (soldTime > 0) {
+                    Long slotId = itemToSlot.get(originalItemId);
+                    if (slotId != null) {
+                        currentInventory.remove(slotId);
+                        itemToSlot.remove(originalItemId);
+                        soldItems.add(originalItemId);
+                        logger.debug("Sold item {} from slot {}", originalItemId, slotId);
+                    }
                     continue;
                 }
                 
                 if (originalItemId > 0) {
                     // 업그레이드 처리
-                    long displayItemId = originalItemId;
-                    if (itemNode.has("upgrade_id") && itemNode.get("upgrade_id").asLong() != 0) {
-                        displayItemId = itemNode.get("upgrade_id").asLong();
-                        logger.debug("Item {} upgraded to {}", originalItemId, displayItemId);
-                    }
-                    
-                    // 최대 12개까지만 허용
-                    if (currentItems.size() < 12 || currentItems.containsKey(originalItemId)) {
-                        Map<String, Object> item = new HashMap<>();
-                        item.put("id", displayItemId);
-                        item.put("name", getItemName(displayItemId));
-                        item.put("image", getItemImagePath(displayItemId));
-                        
-                        // 원본 아이템 ID를 키로 사용 (업그레이드 추적용)
-                        currentItems.put(originalItemId, item);
-                        logger.debug("Added/Updated item: {} ({})", item.get("name"), displayItemId);
+                    if (upgradeId > 0) {
+                        // 기존 아이템이 있는 슬롯을 찾아서 업그레이드
+                        Long slotId = itemToSlot.get(originalItemId);
+                        if (slotId != null) {
+                            currentInventory.put(slotId, upgradeId);
+                            itemToSlot.remove(originalItemId);
+                            itemToSlot.put(upgradeId, slotId);
+                            logger.debug("Upgraded item {} to {} in slot {}", originalItemId, upgradeId, slotId);
+                        } else {
+                            logger.debug("Original item {} not found for upgrade to {}", originalItemId, upgradeId);
+                        }
                     } else {
-                        logger.debug("Item inventory full (12 max), skipping: {}", displayItemId);
+                        // 새 아이템 구매
+                        if (currentInventory.size() < 12) {
+                            long slotId = nextSlotId++;
+                            currentInventory.put(slotId, originalItemId);
+                            itemToSlot.put(originalItemId, slotId);
+                            logger.debug("Added new item {} to slot {}", originalItemId, slotId);
+                        } else {
+                            logger.debug("Inventory full, cannot add item {}", originalItemId);
+                        }
                     }
                 }
             }
             
-            // 최종 아이템 리스트 (최대 12개)
-            finalItems.addAll(currentItems.values());
-            
-            // 정확히 12개로 제한
-            if (finalItems.size() > 12) {
-                finalItems = finalItems.subList(0, 12);
+            // 최종 인벤토리를 Map으로 변환
+            for (Long currentItemId : currentInventory.values()) {
+                if (currentItemId != null && currentItemId > 0) {
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("id", currentItemId);
+                    item.put("name", getItemName(currentItemId));
+                    item.put("image", getItemImagePath(currentItemId));
+                    finalItems.add(item);
+                }
             }
             
             logger.info("Final items count: {} (max 12)", finalItems.size());
@@ -1141,6 +1182,12 @@ public class DeadlockService {
      */
     private void loadItemsFromAPI() {
         try {
+            // 먼저 로컬 매핑 파일 로드 시도
+            if (loadItemsFromLocalMapping()) {
+                return;
+            }
+            
+            // 로컬 매핑 실패 시 API에서 로드
             String itemsUrl = "https://assets.deadlock-api.com/v2/items";
             logger.info("Loading items from API: {}", itemsUrl);
             
@@ -1167,10 +1214,10 @@ public class DeadlockService {
                                     itemNameCache.put(itemId, itemName);
                                     
                                     // 이미지 URL도 캐시
-                                    if (itemNode.has("image_webp")) {
-                                        String imageWebp = itemNode.get("image_webp").asText();
-                                        // 로컬 이미지 경로로 변환 (추후 다운로드할 예정)
-                                        String localImagePath = convertToLocalImagePath(itemId, imageWebp);
+                                    if (itemNode.has("image")) {
+                                        String imageUrl = itemNode.get("image").asText();
+                                        // 로컬 이미지 경로로 변환
+                                        String localImagePath = convertToLocalImagePath(itemId, imageUrl);
                                         itemImageCache.put(itemId, localImagePath);
                                     }
                                     
@@ -1180,7 +1227,7 @@ public class DeadlockService {
                         }
                         
                         itemsLoaded = true;
-                        logger.info("Successfully loaded {} item names and images from API", loadedItems);
+                        logger.info("Successfully loaded {} item names and {} images from API", loadedItems, itemImageCache.size());
                     }
                 } else {
                     logger.warn("Items API returned status: {}", statusCode);
@@ -1194,22 +1241,212 @@ public class DeadlockService {
     }
     
     /**
+     * 로컬 매핑 파일에서 아이템 정보 로드
+     */
+    private boolean loadItemsFromLocalMapping() {
+        try {
+            // ClassPath에서 매핑 파일 찾기
+            ClassPathResource resource = new ClassPathResource("../../../item-id-mapping.json");
+            if (!resource.exists()) {
+                // 프로젝트 루트에서 찾기
+                String mappingPath = System.getProperty("user.dir") + "/item-id-mapping.json";
+                java.io.File mappingFile = new java.io.File(mappingPath);
+                if (!mappingFile.exists()) {
+                    logger.debug("Local item mapping file not found: {}", mappingPath);
+                    return false;
+                }
+                
+                // 파일에서 매핑 로드
+                String mappingContent = new String(java.nio.file.Files.readAllBytes(mappingFile.toPath()));
+                JsonNode mappingNode = objectMapper.readTree(mappingContent);
+                
+                int loadedMappings = 0;
+                if (mappingNode.isObject()) {
+                    mappingNode.fields().forEachRemaining(entry -> {
+                        try {
+                            long itemId = Long.parseLong(entry.getKey());
+                            String imagePath = entry.getValue().asText();
+                            itemImageCache.put(itemId, imagePath);
+                        } catch (NumberFormatException e) {
+                            // 잘못된 ID 형식은 무시
+                        }
+                    });
+                    loadedMappings = itemImageCache.size();
+                }
+                
+                if (loadedMappings > 0) {
+                    itemsLoaded = true;
+                    logger.info("Successfully loaded {} item image mappings from local file", loadedMappings);
+                    
+                    // API에서 아이템 이름은 별도로 로드
+                    loadItemNamesFromAPI();
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("Failed to load from local mapping: {}", e.getMessage());
+        }
+        
+        return false;
+    }
+    
+    /**
+     * API에서 아이템 이름만 로드 (이미지는 로컬 매핑 사용)
+     */
+    private void loadItemNamesFromAPI() {
+        try {
+            String itemsUrl = "https://assets.deadlock-api.com/v2/items";
+            HttpGet request = new HttpGet(itemsUrl);
+            request.setHeader("User-Agent", "Mozilla/5.0 (Deadlock-Stats-Tracker/1.0)");
+            request.setHeader("Accept", "application/json");
+            
+            try (CloseableHttpResponse response = httpClient.execute(request)) {
+                if (response.getStatusLine().getStatusCode() == 200) {
+                    String jsonResponse = EntityUtils.toString(response.getEntity());
+                    JsonNode itemsArray = objectMapper.readTree(jsonResponse);
+                    
+                    if (itemsArray.isArray()) {
+                        int loadedNames = 0;
+                        for (JsonNode itemNode : itemsArray) {
+                            if (itemNode.has("id") && itemNode.has("name")) {
+                                long itemId = itemNode.get("id").asLong();
+                                String itemName = itemNode.get("name").asText();
+                                
+                                if (!itemName.startsWith("citadel_") && !itemName.equals("")) {
+                                    itemNameCache.put(itemId, itemName);
+                                    loadedNames++;
+                                }
+                            }
+                        }
+                        logger.info("Successfully loaded {} item names from API", loadedNames);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to load item names from API: {}", e.getMessage());
+        }
+    }
+    
+    /**
      * 외부 이미지 URL을 로컬 이미지 경로로 변환
      */
     private String convertToLocalImagePath(long itemId, String originalUrl) {
-        // 다운로드한 모든 이미지가 other 디렉토리에 있으므로, 
-        // 원본 URL에서 파일명만 추출하여 other 카테고리 사용
-        String fileName = itemId + ".webp";
+        // Deadlock API의 실제 이미지 URL 패턴 사용
+        // https://assets-bucket.deadlock-api.com/assets-api-res/images/items/[name].png
         
-        if (originalUrl != null) {
-            String[] parts = originalUrl.split("/");
-            if (parts.length > 0) {
-                fileName = parts[parts.length - 1];
-            }
+        // 알려진 아이템 ID와 이미지 이름 매핑
+        Map<Long, String> knownItemImages = new HashMap<>();
+        
+        // Weapon Items (6xxx)
+        knownItemImages.put(6002L, "Headshot_Booster");
+        knownItemImages.put(6005L, "High-Velocity_Mag");
+        knownItemImages.put(6006L, "Hollow_Point_Ward");
+        knownItemImages.put(6007L, "Monster_Rounds");
+        knownItemImages.put(6010L, "Rapid_Rounds");
+        knownItemImages.put(6012L, "Restorative_Shot");
+        knownItemImages.put(6014L, "Berserker");
+        knownItemImages.put(6015L, "Swift_Striker");
+        knownItemImages.put(6016L, "Kinetic_Dash");
+        knownItemImages.put(6017L, "Long_Range");
+        knownItemImages.put(6019L, "Melee_Charge");
+        knownItemImages.put(6020L, "Mystic_Shot");
+        knownItemImages.put(6021L, "Slowing_Bullets");
+        knownItemImages.put(6023L, "Soul_Shredder_Bullets");
+        knownItemImages.put(6025L, "Titanic_Magazine");
+        knownItemImages.put(6027L, "Intensifying_Magazine");
+        knownItemImages.put(6029L, "Point_Blank");
+        knownItemImages.put(6030L, "Sharpshooter");
+        knownItemImages.put(6031L, "Heroic_Aura");
+        knownItemImages.put(6199L, "Active_Reload");
+        knownItemImages.put(6241L, "Burst_Fire");
+        knownItemImages.put(6244L, "Escalating_Resilience");
+        knownItemImages.put(6256L, "Headhunter");
+        knownItemImages.put(6257L, "Hunter's_Aura");
+        knownItemImages.put(6263L, "Point_Blank");
+        knownItemImages.put(6264L, "Pristine_Emblem");
+        knownItemImages.put(6266L, "Sharpshooter");
+        knownItemImages.put(6268L, "Vampiric_Burst");
+        knownItemImages.put(6270L, "Glass_Cannon");
+        knownItemImages.put(6271L, "Lucky_Shot");
+        knownItemImages.put(6272L, "Ricochet");
+        knownItemImages.put(6273L, "Spiritual_Overflow");
+        knownItemImages.put(6274L, "Shadow_Weave");
+        knownItemImages.put(6275L, "Silencer");
+        
+        // Vitality Items (61xx)
+        knownItemImages.put(6103L, "Extra_Health");
+        knownItemImages.put(6104L, "Extra_Regen");
+        knownItemImages.put(6105L, "Sprint_Boots");
+        knownItemImages.put(6106L, "Healing_Rite");
+        knownItemImages.put(6108L, "Bullet_Armor");
+        knownItemImages.put(6109L, "Spirit_Armor");
+        knownItemImages.put(6110L, "Enduring_Speed");
+        knownItemImages.put(6111L, "Reactive_Barrier");
+        knownItemImages.put(6114L, "Health_Nova");
+        knownItemImages.put(6115L, "Restorative_Locket");
+        knownItemImages.put(6116L, "Return_Fire");
+        knownItemImages.put(6118L, "Divine_Barrier");
+        knownItemImages.put(6119L, "Fortitude");
+        knownItemImages.put(6120L, "Improved_Bullet_Armor");
+        knownItemImages.put(6121L, "Improved_Spirit_Armor");
+        knownItemImages.put(6122L, "Lifestrike");
+        knownItemImages.put(6125L, "Superior_Stamina");
+        knownItemImages.put(6129L, "Debuff_Remover");
+        knownItemImages.put(6131L, "Majestic_Leap");
+        knownItemImages.put(6135L, "Metal_Skin");
+        knownItemImages.put(6137L, "Rescue_Beam");
+        knownItemImages.put(6140L, "Colossus");
+        knownItemImages.put(6141L, "Phantom_Strike");
+        knownItemImages.put(6180L, "Inhibitor");
+        knownItemImages.put(6200L, "Leech");
+        knownItemImages.put(6202L, "Unstoppable");
+        
+        // Spirit Items (62xx)
+        knownItemImages.put(6204L, "Ammo_Scavenger");
+        knownItemImages.put(6205L, "Extra_Charge");
+        knownItemImages.put(6206L, "Extra_Spirit");
+        knownItemImages.put(6207L, "Mystic_Burst");
+        knownItemImages.put(6210L, "Infuser");
+        knownItemImages.put(6212L, "Bullet_Resist_Shredder");
+        knownItemImages.put(6213L, "Duration_Extender");
+        knownItemImages.put(6214L, "Improved_Cooldown");
+        knownItemImages.put(6215L, "Improved_Reach");
+        knownItemImages.put(6216L, "Improved_Spirit");
+        knownItemImages.put(6217L, "Quicksilver_Reload");
+        knownItemImages.put(6218L, "Rapid_Recharge");
+        knownItemImages.put(6219L, "Spirit_Lifesteal");
+        knownItemImages.put(6220L, "Spirit_Strike");
+        knownItemImages.put(6221L, "Superior_Cooldown");
+        knownItemImages.put(6222L, "Superior_Duration");
+        knownItemImages.put(6223L, "Surge_of_Power");
+        knownItemImages.put(6224L, "Torment_Pulse");
+        knownItemImages.put(6226L, "Ethereal_Shift");
+        knownItemImages.put(6227L, "Knockdown");
+        knownItemImages.put(6228L, "Silence_Glyph");
+        knownItemImages.put(6229L, "Slowing_Hex");
+        knownItemImages.put(6231L, "Withering_Whip");
+        knownItemImages.put(6232L, "Cold_Front");
+        knownItemImages.put(6235L, "Escalating_Exposure");
+        knownItemImages.put(6237L, "Mystic_Reverb");
+        knownItemImages.put(6239L, "Curse");
+        knownItemImages.put(6245L, "Refresher");
+        knownItemImages.put(6247L, "Diviner's_Kevlar");
+        knownItemImages.put(6249L, "Echo_Shard");
+        knownItemImages.put(6251L, "Magic_Carpet");
+        knownItemImages.put(6252L, "Boundless_Spirit");
+        
+        // 특수 아이템들 
+        knownItemImages.put(3L, "Basic_Magazine");
+        knownItemImages.put(4L, "Close_Quarters");
+        
+        // 매핑된 이미지가 있으면 외부 URL 반환
+        if (knownItemImages.containsKey(itemId)) {
+            String imageName = knownItemImages.get(itemId);
+            return "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/" + imageName + ".png";
         }
         
-        // 모든 아이템 이미지를 other 디렉토리에서 찾음
-        return "/resources/images/items/other/" + fileName;
+        // 매핑이 없으면 기본 이미지
+        return "/resources/images/items/default.svg";
     }
     
     /**
